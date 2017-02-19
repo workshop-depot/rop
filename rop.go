@@ -1,5 +1,19 @@
 package rop
 
+// PipeChain runs a chain concurrently & after the in channel gets closed
+// and depleted, it closes the out channel.
+func PipeChain(in <-chan Payload, processors ...Processor) <-chan Payload {
+	out := make(chan Payload)
+	go func() {
+		defer close(out)
+		p := Chain(processors...)
+		for v := range in {
+			out <- p.Process(v)
+		}
+	}()
+	return out
+}
+
 // Chain create a chain of processors - our railway segments
 func Chain(processors ...Processor) Processor {
 	return ProcessorFunc(func(input Payload) Payload {

@@ -203,3 +203,52 @@ type location struct {
 }
 
 //-----------------------------------------------------------------------------
+
+func TestSample02ConcurrentGeoCSV(t *testing.T) {
+	f, err := os.Open(csvPath)
+	if err != nil {
+		t.Error(err)
+		t.Fail()
+	}
+	defer f.Close()
+
+	reader := csv.NewReader(f)
+	reader.Comma = '|'
+
+	in := make(chan Payload, 30)
+
+	minDist := math.MaxFloat64
+	findMinDist := PipeChain(in, ProcessorFunc(parse), &toPair{}, ProcessorFunc(calcDist))
+
+	go func() {
+		defer close(in)
+
+		var record []string
+		var readErr error
+		for ; readErr == nil; record, readErr = reader.Read() {
+			in <- Payload{Payload: record}
+		}
+	}()
+
+	for res := range findMinDist {
+		if res.Err != nil {
+			// t.Log(`error:`, res.Err)
+			continue
+		}
+		d, ok := res.Payload.(float64)
+		if !ok {
+			t.Error(`RESULT SHOULD BE A float64`)
+			t.Fail()
+		}
+		if d < minDist {
+			minDist = d
+		}
+	}
+
+	if minDist == math.MaxFloat64 {
+		t.Fail()
+	}
+	// t.Logf("%.6f", minDist)
+}
+
+//-----------------------------------------------------------------------------
