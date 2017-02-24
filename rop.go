@@ -59,8 +59,8 @@ type Processor interface {
 // returning (result, err) in Go; but also we use it for applying the same
 // pattern to the input
 type Payload struct {
-	Payload interface{}
-	Err     error
+	Payload interface{} `json:"payload"`
+	Err     error       `json:"err"`
 }
 
 // Constants
