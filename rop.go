@@ -1,74 +1,181 @@
 package rop
 
+import (
+	"fmt"
+)
+
 // PipeChain runs a chain concurrently & after the in channel gets closed
 // and depleted, it closes the out channel.
-func PipeChain(in <-chan Payload, processors ...Processor) <-chan Payload {
-	out := make(chan Payload)
+func PipeChain(in <-chan Result, processors ...interface{}) <-chan Result {
+	out := make(chan Result)
+
+	p := Chain(processors...)
 	go func() {
 		defer close(out)
-		p := Chain(processors...)
 		for v := range in {
-			out <- p.Process(v)
+			out <- p(v)
 		}
 	}()
 	return out
 }
 
-// Chain create a chain of processors - our railway segments
-func Chain(processors ...Processor) Processor {
-	return ProcessorFunc(func(input Payload) Payload {
+// Chain create a chain of processors - our railway segments. Valid signatures
+// are supervisory functions which will always get called:
+//	func(Result) Result
+// and non-supervisory functions which won't get called if there are any errors:
+//	func(interface{}) (interface{}, error)
+//	func(interface{}) error
+//	func(interface{}) interface{}
+//	func(interface{})
+// otherwise an ErrInvalidFunc error would be added to errors passed in the
+// chain. Also the invalid type would be presented inside Msg list.
+func Chain(processors ...interface{}) func(Result) Result {
+	return func(input Result) Result {
 		if len(processors) == 0 {
-			return Payload{Err: ErrNoProcessor}
+			r := NewResult()
+			r.AddErr(ErrNoProcessor)
+			r.mergePrev(&input)
+			return *r
 		}
 
-		unit := ProcessorFunc(func(input1 Payload) Payload { return input1 })
-		var final Processor = unit
+		unit := func(in Result) Result { return in }
+		var final = unit
 
 		for _, prc := range processors {
 			if prc == nil {
 				continue
 			}
-			final = reduce(prc, final)
+			var next = adapt(prc)
+			final = reduce(next, final)
 		}
 
-		return final.Process(input)
-	})
+		return final(input)
+	}
 }
 
-func reduce(p1, p2 Processor) Processor {
-	return ProcessorFunc(func(input Payload) Payload {
-		return p1.Process(p2.Process(input))
-	})
+func reduce(p1, p2 func(Result) Result) func(Result) Result {
+	return func(in Result) Result {
+		return p1(p2(in))
+	}
 }
 
-// ProcessorFunc is a helper for easy conversion of functions with this
-// func(Payload) Payload signature to a Processor interface
-type ProcessorFunc func(Payload) Payload
+func adapt(f interface{}) func(Result) Result {
+	var rf func(Result) Result
+	switch xf := f.(type) {
+	// supervisory function; will always get called
+	case func(Result) Result:
+		rf = xf
 
-// Process implements Processor
-func (x ProcessorFunc) Process(input Payload) Payload {
-	return x(input)
+	// non-supervisory functions will not get called if there sre any errors
+	case func(interface{}) (interface{}, error):
+		rf = func(in Result) Result {
+			if len(in.Err) > 0 {
+				return in
+			}
+			res, err := xf(in.Res)
+			r := NewResult()
+			r.Res = res
+			r.AddErr(err)
+			r.mergePrev(&in)
+			return *r
+		}
+	case func(interface{}) error:
+		rf = func(in Result) Result {
+			if len(in.Err) > 0 {
+				return in
+			}
+			err := xf(in.Res)
+			r := NewResult()
+			r.Res = in.Res
+			r.AddErr(err)
+			r.mergePrev(&in)
+			return *r
+		}
+	case func(interface{}) interface{}:
+		rf = func(in Result) Result {
+			if len(in.Err) > 0 {
+				return in
+			}
+			res := xf(in.Res)
+			r := NewResult()
+			r.Res = res
+			r.mergePrev(&in)
+			return *r
+		}
+	case func(interface{}):
+		rf = func(in Result) Result {
+			if len(in.Err) > 0 {
+				return in
+			}
+			xf(in.Res)
+			r := NewResult()
+			r.Res = in.Res
+			r.mergePrev(&in)
+			return *r
+		}
+	default:
+		rf = func(in Result) Result {
+			r := NewResult()
+			r.Res = in.Res
+			r.AddMsg(Error(fmt.Sprintf("error: railway invalid func type %T", xf)))
+			r.AddErr(ErrInvalidFunc)
+			r.mergePrev(&in)
+			return in
+		}
+	}
+	return rf
 }
 
-// Processor is a segment of our railway
-type Processor interface {
-	Process(Payload) Payload
+// NewResult creates new Result
+func NewResult() *Result {
+	r := new(Result)
+	return r
 }
 
-// Payload is what goes around and comes around on which IMO is the same easy
-// returning (result, err) in Go; but also we use it for applying the same
-// pattern to the input
-type Payload struct {
-	Payload interface{} `json:"payload"`
-	Err     error       `json:"err"`
+// Result passes through the railway
+type Result struct {
+	Res interface{} `json:"res"`
+	// Msg contains messages/events
+	Msg []error `json:"msg"`
+	Err []error `json:"err"`
 }
+
+func (r *Result) mergePrev(prev *Result) *Result {
+	if prev == nil {
+		return r
+	}
+	if len(prev.Msg) > 0 {
+		r.Msg = append(prev.Msg, r.Msg...)
+	}
+	if len(prev.Err) > 0 {
+		r.Err = append(prev.Err, r.Err...)
+	}
+	return r
+}
+
+// AddErr adds an error
+func (r *Result) AddErr(err error) *Result {
+	if err != nil {
+		r.Err = append(r.Err, err)
+	}
+	return r
+}
+
+// AddMsg adds a (domain) message/event
+func (r *Result) AddMsg(msg error) *Result {
+	if msg != nil {
+		r.Msg = append(r.Msg, msg)
+	}
+	return r
+}
+
+// Error helps with creating easy, comparable errors/messages
+type Error string
+
+func (e Error) Error() string { return string(e) }
 
 // Constants
 const (
 	ErrNoProcessor = Error(`ErrNoProcessor`)
+	ErrInvalidFunc = Error(`ErrInvalidFunc`)
 )
-
-// Error helps with creating easy, comparable errors
-type Error string
-
-func (v Error) Error() string { return string(v) }

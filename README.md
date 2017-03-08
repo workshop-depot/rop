@@ -1,27 +1,27 @@
 # rop
-### Minimal Railway Oriented Programming for Go
+### Railway Oriented Programming for Go
 
 For reading more about Railway Oriented Programming, look  [here](http://fsharpforfunandprofit.com/rop/).
 
-It's easy to construct reusable chains, with stateless `Processor`s and even (to some extent) graphs of functionalities.
+It's easy to construct reusable chains, with stateless functions and even (to some extent) graphs of functionalities.
 
-A sequential chain of `Processor`s can be made like:
+A sequential chain of functions can be made like:
 
 ```go
 c := Chain(step1, step2, step3)
 
-res := c.Process(Payload{...})
-if res.Err != nil {
-    // attend to error
-}
+res := c(Result{...})
+// res.Err contains errors
+// res.Msg conains (domain) messages/events
+// res.Res contains the computation result
 ```
 
-Returning `(result, err)` is actually a Go idiom. The reason for defining a `Payload` struct which does the same, is that it makes it possible to send the result over a channel; it's pretty much just a tuple.
+Returning `(result, err)` is actually a Go idiom. The reason for defining a `Result` struct which does the same, is that it makes it possible to send the result over a channel; it's pretty much just a tuple.
 
 Also a chain of processors can run cuncurrently, employing `PipeChain` functions and channels:
 
 ```go
-in := make(chan Payload)
+in := make(chan Result)
 
 go func() {
     defer close(in) // we close it when we are done
@@ -37,4 +37,4 @@ for res := range out {
 // gets depleted & closed, and ranging over out will stop.
 ```
 
-Status: I've used it in bunch of in-house code bases & 'am happy with it. Of-course one coucld with full blown enterprisy frameworks! But I like how Go simplifies things to the bone! For a sample see the test file.
+Status: After V1, saw that embedding domain messages/events inside the `Result` itself makes things much simpler. But this is not a finalized V2 - yet - and might change.
