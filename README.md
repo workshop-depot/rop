@@ -18,6 +18,15 @@ res := c(Result{...})
 
 Returning `(result, err)` is actually a Go idiom. The reason for defining a `Result` struct which does the same, is that it makes it possible to send the result over a channel; it's pretty much just a tuple.
 
+Each function in the chain can have one of these signatures:
+
+* Supervisory Sunctions `func(Result) Result`, which will always get called and
+* Non-Supervisory Functions which won't get called if there are any errors in a previous step:
+    * `func(interface{}) (interface{}, error)`
+    * `func(interface{}) error`
+    * `func(interface{}) interface{}`
+    * `func(interface{})`
+
 Also a chain of processors can run cuncurrently, employing `PipeChain` functions and channels:
 
 ```go

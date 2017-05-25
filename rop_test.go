@@ -2,6 +2,7 @@ package rop
 
 import (
 	"encoding/csv"
+	"errors"
 	"fmt"
 	"math"
 	"math/rand"
@@ -9,6 +10,10 @@ import (
 	"strconv"
 	"testing"
 	"time"
+
+	"path/filepath"
+
+	"github.com/stretchr/testify/assert"
 )
 
 //-----------------------------------------------------------------------------
@@ -21,18 +26,8 @@ func TestMain(m *testing.M) {
 	m.Run()
 }
 
-func TestErrorMessages(t *testing.T) {
-	var x error
-	_ = x
-
-	{
-		var y Error
-		x = y
-	}
-}
-
 func TestSample01Simple(t *testing.T) {
-	errBoom := Error(`BOOM!`)
+	errBoom := errors.New("boom")
 
 	var step1 = func(input Result) Result {
 		return input
@@ -55,9 +50,7 @@ func TestSample01Simple(t *testing.T) {
 	r := NewResult()
 	r.Res = `1st`
 	res := c(*r)
-	if matchFind(errBoom, res.Err...) < 0 {
-		t.Fail()
-	}
+	assert.Contains(t, res.Err, errBoom)
 
 	r = NewResult()
 	r.Res = `2nd`
@@ -142,47 +135,37 @@ func TestSample02Handlers(t *testing.T) {
 		r := NewResult()
 		r.Res = `1`
 		res := c(*r)
-		if matchFind(ErrNotProcessed, res.Err...) < 0 {
-			t.Fail()
-		}
-		if matchFind(ErrNotInt, res.Err...) < 0 {
-			t.Fail()
-		}
+		assert.Contains(t, res.Err, ErrNotProcessed)
+		assert.Contains(t, res.Err, ErrNotInt)
 	}
 
 	{
 		r := NewResult()
 		r.Res = 0
 		res := c(*r)
-		if matchFind(MsgProcessed, res.Msg...) < 0 {
-			t.Fail()
-		}
-		if matchFind(MsgIsOdd, res.Msg...) < 0 {
-			t.Fail()
-		}
+		assert.Contains(t, res.Msg, MsgProcessed)
+		assert.Contains(t, res.Msg, MsgIsOdd)
 	}
 
 	{
 		r := NewResult()
 		r.Res = 1
 		res := c(*r)
-		if matchFind(MsgProcessed, res.Msg...) < 0 {
-			t.Fail()
-		}
-		if matchFind(MsgIsEven, res.Msg...) < 0 {
-			t.Fail()
-		}
+		assert.Contains(t, res.Msg, MsgProcessed)
+		assert.Contains(t, res.Msg, MsgIsEven)
 	}
 }
 
-const (
-	MsgIsEven    = Error(`MsgIsEven`)
-	MsgIsOdd     = Error(`MsgIsOdd`)
-	MsgProcessed = Error(`MsgProcessed`)
+type message struct{ error }
 
-	ErrNotInt       = Error(`ErrNotInt`)
-	ErrNegative     = Error(`ErrNegative`)
-	ErrNotProcessed = Error(`ErrNotProcessed`)
+var (
+	MsgIsEven    = message{errors.New(`MsgIsEven`)}
+	MsgIsOdd     = message{errors.New(`MsgIsOdd`)}
+	MsgProcessed = message{errors.New(`MsgProcessed`)}
+
+	ErrNotInt       = errors.New(`ErrNotInt`)
+	ErrNegative     = errors.New(`ErrNegative`)
+	ErrNotProcessed = errors.New(`ErrNotProcessed`)
 )
 
 //-----------------------------------------------------------------------------
@@ -192,7 +175,7 @@ func deleteSampleCSV() {
 }
 
 func createSampleCSV() {
-	csvPath = fmt.Sprintf("/tmp/TEST_%d.csv", time.Now().UnixNano())
+	csvPath = filepath.Join(os.TempDir(), fmt.Sprintf("TEST_%d.csv", time.Now().UnixNano()))
 	f, err := os.Create(csvPath)
 	if err != nil {
 		panic(err)
@@ -228,8 +211,7 @@ var (
 func TestSample02GeoCSV(t *testing.T) {
 	f, err := os.Open(csvPath)
 	if err != nil {
-		t.Error(err)
-		t.Fail()
+		t.Fatal(err)
 	}
 	defer f.Close()
 
@@ -250,8 +232,7 @@ func TestSample02GeoCSV(t *testing.T) {
 		}
 		d, ok := res.Res.(float64)
 		if !ok {
-			t.Error(`RESULT SHOULD BE A float64`)
-			t.Fail()
+			t.Fatal(`RESULT SHOULD BE A float64`)
 		}
 		if d < minDist {
 			minDist = d
@@ -265,16 +246,16 @@ func TestSample02GeoCSV(t *testing.T) {
 
 func calcDist(input Result) Result {
 	if input.Res == nil {
-		input.AddErr(Error(`NO PAYLOAD`))
+		input.AddErr(errors.New(`NO PAYLOAD`))
 		return input
 	}
 	p, ok := input.Res.(pair)
 	if !ok {
-		input.AddErr(Error(`PAYLOAD IS NOT A pair`))
+		input.AddErr(errors.New(`PAYLOAD IS NOT A pair`))
 		return input
 	}
 	if p.fst == nil || p.snd == nil {
-		input.AddErr(Error(`PAIR MUST CONTAIN TWO LOCATIONS`))
+		input.AddErr(errors.New(`PAIR MUST CONTAIN TWO LOCATIONS`))
 		return input
 	}
 	d := distance(*p.fst, *p.snd)
@@ -289,12 +270,12 @@ type toPair struct {
 
 func (x *toPair) Process(input Result) Result {
 	if input.Res == nil {
-		input.AddErr(Error(`NO PAYLOAD`))
+		input.AddErr(errors.New(`NO PAYLOAD`))
 		return input
 	}
 	loc, ok := input.Res.(location)
 	if !ok {
-		input.AddErr(Error(`PAYLOAD IS NOT A location`))
+		input.AddErr(errors.New(`PAYLOAD IS NOT A location`))
 		return input
 	}
 	x.fst, x.snd = x.snd, &loc
@@ -306,16 +287,16 @@ type pair struct{ fst, snd *location }
 
 func parse(input Result) Result {
 	if input.Res == nil {
-		input.AddErr(Error(`NO PAYLOAD`))
+		input.AddErr(errors.New(`NO PAYLOAD`))
 		return input
 	}
 	record, ok := input.Res.([]string)
 	if !ok {
-		input.AddErr(Error(`PAYLOAD IS NOT A []string`))
+		input.AddErr(errors.New(`PAYLOAD IS NOT A []string`))
 		return input
 	}
 	if len(record) != 3 {
-		input.AddErr(Error(`RECORD OF []string MUST HAVE 3 ITEMS`))
+		input.AddErr(errors.New(`RECORD OF []string MUST HAVE 3 ITEMS`))
 		return input
 	}
 	lon, err := strconv.ParseFloat(record[1], 64)
@@ -353,8 +334,7 @@ type location struct {
 func TestSample02ConcurrentGeoCSV(t *testing.T) {
 	f, err := os.Open(csvPath)
 	if err != nil {
-		t.Error(err)
-		t.Fail()
+		t.Fatal(err)
 	}
 	defer f.Close()
 
@@ -385,8 +365,7 @@ func TestSample02ConcurrentGeoCSV(t *testing.T) {
 		}
 		d, ok := res.Res.(float64)
 		if !ok {
-			t.Error(`RESULT SHOULD BE A float64`)
-			t.Fail()
+			t.Fatal(`RESULT SHOULD BE A float64`)
 		}
 		if d < minDist {
 			minDist = d
@@ -400,3 +379,45 @@ func TestSample02ConcurrentGeoCSV(t *testing.T) {
 }
 
 //-----------------------------------------------------------------------------
+
+func TestSupervisorySteps01(t *testing.T) {
+	steps := []interface{}{
+		func(in Result) Result {
+			in.AddMsg(errors.New("START"))
+			return in
+		},
+		func(input interface{}) (interface{}, error) {
+			return "RES 1", nil
+		},
+		func(input interface{}) (interface{}, error) {
+			assert.Equal(t, "RES 1", input)
+			return nil, errors.New("ERR 2")
+		},
+		func(input interface{}) (interface{}, error) {
+			panic("must never get called")
+		},
+		func(in Result) Result {
+			in.AddMsg(errors.New("supervised"))
+			return in
+		},
+		func(in Result) Result {
+			in.AddMsg(errors.New("END"))
+			return in
+		},
+	}
+
+	c := Chain(steps...)
+
+	{
+		r := NewResult()
+		r.Res = 1
+		res := c(*r)
+		assert.Nil(t, res.Res)
+		assert.Len(t, res.Msg, 3)
+		assert.Equal(t, "START", res.Msg[0].Error())
+		assert.Equal(t, "supervised", res.Msg[1].Error())
+		assert.Equal(t, "END", res.Msg[2].Error())
+		assert.Len(t, res.Err, 1)
+		assert.Equal(t, "ERR 2", res.Err[0].Error())
+	}
+}

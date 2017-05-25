@@ -1,56 +1,57 @@
 package rop
 
 import (
+	"errors"
 	"fmt"
 )
 
-// PipeChain runs a chain concurrently & after the in channel gets closed
-// and depleted, it closes the out channel.
-func PipeChain(in <-chan Result, processors ...interface{}) <-chan Result {
-	out := make(chan Result)
+// Errors
+var (
+	ErrNoProcessor = errors.New(`ErrNoProcessor`)
+	ErrInvalidFunc = errors.New(`ErrInvalidFunc`)
+)
 
-	p := Chain(processors...)
-	go func() {
-		defer close(out)
-		for v := range in {
-			out <- p(v)
-		}
-	}()
-	return out
+// Result passes through the railway
+type Result struct {
+	Res interface{} `json:"res"`
+	// Msg contains messages/events
+	Msg []error `json:"msg"`
+	Err []error `json:"err"`
 }
 
-// Chain create a chain of processors - our railway segments. Valid signatures
-// are supervisory functions which will always get called:
-//	func(Result) Result
-// and non-supervisory functions which won't get called if there are any errors:
-//	func(interface{}) (interface{}, error)
-//	func(interface{}) error
-//	func(interface{}) interface{}
-//	func(interface{})
-// otherwise an ErrInvalidFunc error would be added to errors passed in the
-// chain. Also the invalid type would be presented inside Msg list.
-func Chain(processors ...interface{}) func(Result) Result {
-	return func(input Result) Result {
-		if len(processors) == 0 {
-			r := NewResult()
-			r.AddErr(ErrNoProcessor)
-			r.mergePrev(&input)
-			return *r
-		}
+// NewResult creates new Result
+func NewResult() *Result {
+	r := new(Result)
+	return r
+}
 
-		unit := func(in Result) Result { return in }
-		var final = unit
-
-		for _, prc := range processors {
-			if prc == nil {
-				continue
-			}
-			var next = adapt(prc)
-			final = reduce(next, final)
-		}
-
-		return final(input)
+func (r *Result) mergePrev(prev *Result) *Result {
+	if prev == nil {
+		return r
 	}
+	if len(prev.Msg) > 0 {
+		r.Msg = append(prev.Msg, r.Msg...)
+	}
+	if len(prev.Err) > 0 {
+		r.Err = append(prev.Err, r.Err...)
+	}
+	return r
+}
+
+// AddErr adds an error
+func (r *Result) AddErr(err error) *Result {
+	if err != nil {
+		r.Err = append(r.Err, err)
+	}
+	return r
+}
+
+// AddMsg adds a (domain) message/event
+func (r *Result) AddMsg(msg error) *Result {
+	if msg != nil {
+		r.Msg = append(r.Msg, msg)
+	}
+	return r
 }
 
 func reduce(p1, p2 func(Result) Result) func(Result) Result {
@@ -117,7 +118,7 @@ func adapt(f interface{}) func(Result) Result {
 		rf = func(in Result) Result {
 			r := NewResult()
 			r.Res = in.Res
-			r.AddMsg(Error(fmt.Sprintf("error: railway invalid func type %T", xf)))
+			r.AddMsg(fmt.Errorf("error: railway invalid func type %T", xf))
 			r.AddErr(ErrInvalidFunc)
 			r.mergePrev(&in)
 			return in
@@ -126,56 +127,51 @@ func adapt(f interface{}) func(Result) Result {
 	return rf
 }
 
-// NewResult creates new Result
-func NewResult() *Result {
-	r := new(Result)
-	return r
+// Chain create a chain of processors - our railway segments. Valid signatures
+// are supervisory functions which will always get called:
+//	func(Result) Result
+// and non-supervisory functions which won't get called if there are any errors:
+//	func(interface{}) (interface{}, error)
+//	func(interface{}) error
+//	func(interface{}) interface{}
+//	func(interface{})
+// otherwise an ErrInvalidFunc error would be added to errors passed in the
+// chain. Also the invalid type would be presented inside Msg list.
+func Chain(processors ...interface{}) func(Result) Result {
+	return func(input Result) Result {
+		if len(processors) == 0 {
+			r := NewResult()
+			r.AddErr(ErrNoProcessor)
+			r.mergePrev(&input)
+			return *r
+		}
+
+		unit := func(in Result) Result { return in }
+		var final = unit
+
+		for _, prc := range processors {
+			if prc == nil {
+				continue
+			}
+			var next = adapt(prc)
+			final = reduce(next, final)
+		}
+
+		return final(input)
+	}
 }
 
-// Result passes through the railway
-type Result struct {
-	Res interface{} `json:"res"`
-	// Msg contains messages/events
-	Msg []error `json:"msg"`
-	Err []error `json:"err"`
+// PipeChain runs a chain concurrently & after the in channel gets closed
+// and depleted, it closes the out channel.
+func PipeChain(in <-chan Result, processors ...interface{}) <-chan Result {
+	out := make(chan Result)
+
+	p := Chain(processors...)
+	go func() {
+		defer close(out)
+		for v := range in {
+			out <- p(v)
+		}
+	}()
+	return out
 }
-
-func (r *Result) mergePrev(prev *Result) *Result {
-	if prev == nil {
-		return r
-	}
-	if len(prev.Msg) > 0 {
-		r.Msg = append(prev.Msg, r.Msg...)
-	}
-	if len(prev.Err) > 0 {
-		r.Err = append(prev.Err, r.Err...)
-	}
-	return r
-}
-
-// AddErr adds an error
-func (r *Result) AddErr(err error) *Result {
-	if err != nil {
-		r.Err = append(r.Err, err)
-	}
-	return r
-}
-
-// AddMsg adds a (domain) message/event
-func (r *Result) AddMsg(msg error) *Result {
-	if msg != nil {
-		r.Msg = append(r.Msg, msg)
-	}
-	return r
-}
-
-// Error helps with creating easy, comparable errors/messages
-type Error string
-
-func (e Error) Error() string { return string(e) }
-
-// Constants
-const (
-	ErrNoProcessor = Error(`ErrNoProcessor`)
-	ErrInvalidFunc = Error(`ErrInvalidFunc`)
-)
