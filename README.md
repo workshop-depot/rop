@@ -46,4 +46,4 @@ for res := range out {
 // gets depleted & closed, and ranging over out will stop.
 ```
 
-Status: After V1, saw that embedding domain messages/events inside the `Result` itself makes things much simpler. But this is not a finalized V2 - yet - and might change.
+Status: In V2; after V1, saw that embedding domain messages/events inside the `Result` itself makes things much simpler.
