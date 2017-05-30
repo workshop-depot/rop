@@ -11,12 +11,17 @@ var (
 	ErrInvalidFunc = errors.New(`ErrInvalidFunc`)
 )
 
-// Result passes through the railway
-type Result struct {
-	Res interface{} `json:"res"`
+// Domain messages/events/errors
+type Domain struct {
 	// Msg contains messages/events
 	Msg []error `json:"msg"`
 	Err []error `json:"err"`
+}
+
+// Result passes through the railway
+type Result struct {
+	Res interface{} `json:"res"`
+	Domain
 }
 
 // NewResult creates new Result
