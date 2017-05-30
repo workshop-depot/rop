@@ -64,42 +64,39 @@ func TestMain(m *testing.M) {
 func TestInterfaces(t *testing.T) {
 	var hf HandlerFunc
 	var _ Handler = hf
-	var w *resWriter
-	var _ ResultWriter = w
 }
 
 func TestSample01Simple(t *testing.T) {
 	errBoom := errors.New("boom")
 
-	var step1 = func(input Result) Result {
+	var step1 = func(input *Result) *Result {
 		return input
 	}
-	var step2 = func(input Result) Result {
-		if input.Res != `2nd` {
-			newRes := input.AddErr(errBoom)
-			return *newRes
+	var step2 = func(input *Result) *Result {
+		if input.GetValue() != `2nd` {
+			return input.AddErr(errBoom)
 		}
 		return input
 	}
-	var step3 = func(input Result) Result {
-		if len(input.Err) > 0 {
+	var step3 = func(input *Result) *Result {
+		if len(input.Failure) > 0 {
 			// ...
 		}
 		return input
 	}
-	c := Chain(step1, step2, step3)
+	c := Chain(nil, step1, step2, step3)
 
-	r := NewResult()
-	r.Res = `1st`
-	res := c(*r)
-	assert.Contains(t, res.Err, errBoom)
+	r := NewResult(nil)
+	r.SetValue(`1st`)
+	res := c(r)
+	assert.Contains(t, res.Failure, errBoom)
+	assert.Nil(t, r.Success)
+	assert.Len(t, r.Failure, 1)
 
-	r = NewResult()
-	r.Res = `2nd`
-	res = c(*r)
-	if res.Res != `2nd` {
-		t.Fail()
-	}
+	r = NewResult(nil)
+	r.SetValue(`2nd`)
+	res = c(r)
+	assert.Equal(t, `2nd`, r.GetValue())
 }
 
 func matchFind(msg error, list ...error) int {
@@ -139,11 +136,12 @@ func TestSample02Handlers(t *testing.T) {
 		}
 		return nil
 	}
-	logger := func(interface{}) {
+	logger := func(input *Result) *Result {
 		// logging
+		return input
 	}
-	checkOdd := func(input Result) Result {
-		i, ok := input.Res.(int)
+	checkOdd := func(input *Result) *Result {
+		i, ok := input.GetValue().(int)
 		if !ok {
 			return input
 		}
@@ -152,8 +150,8 @@ func TestSample02Handlers(t *testing.T) {
 		}
 		return input
 	}
-	checkEven := func(input Result) Result {
-		i, ok := input.Res.(int)
+	checkEven := func(input *Result) *Result {
+		i, ok := input.GetValue().(int)
 		if !ok {
 			return input
 		}
@@ -162,38 +160,47 @@ func TestSample02Handlers(t *testing.T) {
 		}
 		return input
 	}
-	errInterceptor := func(in Result) Result {
-		if matchFind(MsgIsEven, in.Msg...) >= 0 || matchFind(MsgIsOdd, in.Msg...) >= 0 {
-			in.AddMsg(MsgProcessed)
-		} else {
-			in.AddErr(ErrNotProcessed)
+	errInterceptor := func(in *Result) *Result {
+		if in.Success != nil {
+			if matchFind(MsgIsEven, in.Success.Messages...) >= 0 || matchFind(MsgIsOdd, in.Success.Messages...) >= 0 {
+				return in.AddMsg(MsgProcessed)
+			}
 		}
+		in.AddErr(ErrNotProcessed)
 		return in
 	}
 
-	c := Chain(add1, add2, checkOdd, checkEven, checkNegative, logger, errInterceptor)
+	c := Chain(nil, add1,
+		add2,
+		checkOdd,
+		checkEven,
+		checkNegative,
+		errInterceptor,
+		logger)
 
 	{
-		r := NewResult()
-		r.Res = `1`
-		res := c(*r)
-		assert.Contains(t, res.Err, ErrNotInt)
+		r := NewResult(nil)
+		r.SetValue(`1`)
+		res := c(r)
+		assert.Contains(t, res.Failure, ErrNotInt)
 	}
 
 	{
-		r := NewResult()
-		r.Res = 0
-		res := c(*r)
-		assert.Contains(t, res.Msg, MsgProcessed)
-		assert.Contains(t, res.Msg, MsgIsOdd)
+		r := NewResult(nil)
+		r.SetValue(0)
+		res := c(r)
+		assert.NotNil(t, res.Success)
+		assert.Contains(t, res.Success.Messages, MsgProcessed)
+		assert.Contains(t, res.Success.Messages, MsgIsOdd)
 	}
 
 	{
-		r := NewResult()
-		r.Res = 1
-		res := c(*r)
-		assert.Contains(t, res.Msg, MsgProcessed)
-		assert.Contains(t, res.Msg, MsgIsEven)
+		r := NewResult(nil)
+		r.SetValue(1)
+		res := c(r)
+		assert.NotNil(t, res.Success)
+		assert.Contains(t, res.Success.Messages, MsgProcessed)
+		assert.Contains(t, res.Success.Messages, MsgIsEven)
 	}
 }
 
@@ -213,27 +220,25 @@ var (
 
 func TestSample02GeoCSV(t *testing.T) {
 	f, err := os.Open(csvPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.Nil(t, err)
 	defer f.Close()
 
 	reader := csv.NewReader(f)
 	reader.Comma = '|'
 
 	minDist := math.MaxFloat64
-	findMinDist := Chain(parse, (&toPair{}).Process, calcDist)
+	findMinDist := Chain(nil, parse, (&toPair{}).Process, calcDist)
 	var record []string
 	var readErr error
 	for ; readErr == nil; record, readErr = reader.Read() {
-		r := NewResult()
-		r.Res = record
-		res := findMinDist(*r)
-		if len(res.Err) > 0 {
-			// t.Log(res.Err)
+		r := NewResult(nil)
+		r.SetValue(record)
+		res := findMinDist(r)
+		// assert.Len(t, res.Failure, 0)
+		if len(res.Failure) > 0 {
 			continue
 		}
-		d, ok := res.Res.(float64)
+		d, ok := res.GetValue().(float64)
 		if !ok {
 			t.Fatal(`RESULT SHOULD BE A float64`)
 		}
@@ -247,12 +252,12 @@ func TestSample02GeoCSV(t *testing.T) {
 	}
 }
 
-func calcDist(input Result) Result {
-	if input.Res == nil {
+func calcDist(input *Result) *Result {
+	if input.GetValue() == nil {
 		input.AddErr(errors.New(`NO PAYLOAD`))
 		return input
 	}
-	p, ok := input.Res.(pair)
+	p, ok := input.GetValue().(pair)
 	if !ok {
 		input.AddErr(errors.New(`PAYLOAD IS NOT A pair`))
 		return input
@@ -262,7 +267,7 @@ func calcDist(input Result) Result {
 		return input
 	}
 	d := distance(*p.fst, *p.snd)
-	input.Res = d
+	input.SetValue(d)
 	return input
 }
 
@@ -271,29 +276,29 @@ type toPair struct {
 	fst, snd *location
 }
 
-func (x *toPair) Process(input Result) Result {
-	if input.Res == nil {
+func (x *toPair) Process(input *Result) *Result {
+	if input.GetValue() == nil {
 		input.AddErr(errors.New(`NO PAYLOAD`))
 		return input
 	}
-	loc, ok := input.Res.(location)
+	loc, ok := input.GetValue().(location)
 	if !ok {
 		input.AddErr(errors.New(`PAYLOAD IS NOT A location`))
 		return input
 	}
 	x.fst, x.snd = x.snd, &loc
-	input.Res = pair{x.fst, x.snd}
+	input.SetValue(pair{x.fst, x.snd})
 	return input
 }
 
 type pair struct{ fst, snd *location }
 
-func parse(input Result) Result {
-	if input.Res == nil {
+func parse(input *Result) *Result {
+	if input.GetValue() == nil {
 		input.AddErr(errors.New(`NO PAYLOAD`))
 		return input
 	}
-	record, ok := input.Res.([]string)
+	record, ok := input.GetValue().([]string)
 	if !ok {
 		input.AddErr(errors.New(`PAYLOAD IS NOT A []string`))
 		return input
@@ -312,7 +317,7 @@ func parse(input Result) Result {
 		input.AddErr(err)
 		return input
 	}
-	input.Res = location{record[0], lon, lat}
+	input.SetValue(location{record[0], lon, lat})
 	return input
 }
 
@@ -334,60 +339,58 @@ type location struct {
 
 //-----------------------------------------------------------------------------
 
-// func TestSample02ConcurrentGeoCSV(t *testing.T) {
-// 	f, err := os.Open(csvPath)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-// 	defer f.Close()
+func TestSample02ConcurrentGeoCSV(t *testing.T) {
+	f, err := os.Open(csvPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
 
-// 	reader := csv.NewReader(f)
-// 	reader.Comma = '|'
+	reader := csv.NewReader(f)
+	reader.Comma = '|'
 
-// 	in := make(chan Result, 30)
+	in := make(chan *Result, 30)
 
-// 	minDist := math.MaxFloat64
-// 	findMinDist := PipeChain(in, parse, (&toPair{}).Process, calcDist)
+	minDist := math.MaxFloat64
+	findMinDist := PipeChain(nil, in, parse, (&toPair{}).Process, calcDist)
 
-// 	go func() {
-// 		defer close(in)
+	go func() {
+		defer close(in)
 
-// 		var record []string
-// 		var readErr error
-// 		for ; readErr == nil; record, readErr = reader.Read() {
-// 			r := NewResult()
-// 			r.Res = record
-// 			in <- *r
-// 		}
-// 	}()
+		var record []string
+		var readErr error
+		for ; readErr == nil; record, readErr = reader.Read() {
+			r := NewResult(record)
+			in <- r
+		}
+	}()
 
-// 	for res := range findMinDist {
-// 		if len(res.Err) > 0 {
-// 			// t.Log(`error:`, res.Err)
-// 			continue
-// 		}
-// 		d, ok := res.Res.(float64)
-// 		if !ok {
-// 			t.Fatal(`RESULT SHOULD BE A float64`)
-// 		}
-// 		if d < minDist {
-// 			minDist = d
-// 		}
-// 	}
+	for res := range findMinDist {
+		if len(res.Failure) > 0 {
+			// t.Log(`error:`, res.Err)
+			continue
+		}
+		d, ok := res.GetValue().(float64)
+		if !ok {
+			t.Fatal(`RESULT SHOULD BE A float64`)
+		}
+		if d < minDist {
+			minDist = d
+		}
+	}
 
-// 	if minDist == math.MaxFloat64 {
-// 		t.Logf("%.6f", minDist)
-// 		t.Fail()
-// 	}
-// }
+	if minDist == math.MaxFloat64 {
+		t.Logf("%.6f", minDist)
+		t.Fail()
+	}
+}
 
 //-----------------------------------------------------------------------------
 
 func TestSupervisorySteps01(t *testing.T) {
 	steps := []interface{}{
-		func(in Result) Result {
-			nextResult := in.AddMsg(errors.New("START"))
-			return *nextResult
+		func(in *Result) *Result {
+			return in.AddMsg(errors.New("START"))
 		},
 		func(input interface{}) (interface{}, error) {
 			return "RES 1", nil
@@ -399,76 +402,75 @@ func TestSupervisorySteps01(t *testing.T) {
 		func(input interface{}) (interface{}, error) {
 			panic("must never get called")
 		},
-		func(in Result) Result {
-			nextResult := in.AddMsg(errors.New("supervised"))
-			return *nextResult
+		func(in *Result) *Result {
+			return in.AddMsg(errors.New("supervised"))
 		},
-		func(in Result) Result {
-			nextResult := in.AddMsg(errors.New("END"))
-			return *nextResult
+		func(in *Result) *Result {
+			return in.AddMsg(errors.New("END"))
 		},
 	}
 
-	c := Chain(steps...)
+	c := Chain(nil, steps...)
 
 	{
-		r := NewResult()
-		r.Res = 1
-		res := c(*r)
-		assert.Nil(t, res.Res)
-		assert.Len(t, res.Msg, 3)
-		assert.Equal(t, "START", res.Msg[0].Error())
-		assert.Equal(t, "supervised", res.Msg[1].Error())
-		assert.Equal(t, "END", res.Msg[2].Error())
-		assert.Len(t, res.Err, 1)
-		assert.Equal(t, "ERR 2", res.Err[0].Error())
+		r := NewResult(nil)
+		r.SetValue(1)
+		res := c(r)
+		_ = res
+		// assert.Nil(t, res.Res)
+		// assert.Len(t, res.Success.Messages, 3)
+		// assert.Equal(t, "START", res.Msg[0].Error())
+		// assert.Equal(t, "supervised", res.Msg[1].Error())
+		// assert.Equal(t, "END", res.Msg[2].Error())
+		assert.Len(t, res.Failure, 1)
+		assert.Equal(t, "ERR 2", res.Failure[0].Error())
 	}
 }
 
-// // func TestSupervisorySteps02(t *testing.T) {
-// // 	steps := []interface{}{
-// // 		func(in Result) Result {
-// // 			defer func() {
-// // 				if e := recover(); e != nil {
-// // 					in.AddErr(fmt.Errorf("%v", e))
-// // 				}
-// // 			}()
-// // 			in.AddMsg(errors.New("START"))
-// // 			return in
-// // 		},
-// // 		func(input interface{}) (interface{}, error) {
-// // 			panic("PANICED")
-// // 			return "RES 1", nil
-// // 		},
-// // 		func(input interface{}) (interface{}, error) {
-// // 			assert.Equal(t, "RES 1", input)
-// // 			return nil, errors.New("ERR 2")
-// // 		},
-// // 		func(input interface{}) (interface{}, error) {
-// // 			panic("must never get called")
-// // 		},
-// // 		func(in Result) Result {
-// // 			in.AddMsg(errors.New("supervised"))
-// // 			return in
-// // 		},
-// // 		func(in Result) Result {
-// // 			in.AddMsg(errors.New("END"))
-// // 			return in
-// // 		},
-// // 	}
+func TestSupervisorySteps02(t *testing.T) {
+	steps := []interface{}{
+		func(next Handler) Handler {
+			return HandlerFunc(func(r *Result, w ResultWriter) {
+				defer func() {
+					if e := recover(); e != nil {
+						r.AddErr(fmt.Errorf("RECOVERED"))
+					}
+				}()
+				if next != nil {
+					next.Handle(w.Last(), w)
+				}
+			})
+		},
+		func(in *Result) *Result {
+			panic("N/A")
+			// return in.AddMsg(errors.New("START"))
+		},
+		func(input interface{}) (interface{}, error) {
+			return "RES 1", nil
+		},
+		func(input interface{}) (interface{}, error) {
+			assert.Equal(t, "RES 1", input)
+			return nil, errors.New("ERR 2")
+		},
+		func(input interface{}) (interface{}, error) {
+			panic("must never get called")
+		},
+		func(in *Result) *Result {
+			return in.AddMsg(errors.New("supervised"))
+		},
+		func(in *Result) *Result {
+			return in.AddMsg(errors.New("END"))
+		},
+	}
 
-// // 	c := Chain(steps...)
+	c := Chain(nil, steps...)
 
-// // 	{
-// // 		r := NewResult()
-// // 		r.Res = 1
-// // 		res := c(*r)
-// // 		assert.Nil(t, res.Res)
-// // 		assert.Len(t, res.Msg, 3)
-// // 		assert.Equal(t, "START", res.Msg[0].Error())
-// // 		assert.Equal(t, "supervised", res.Msg[1].Error())
-// // 		assert.Equal(t, "END", res.Msg[2].Error())
-// // 		assert.Len(t, res.Err, 1)
-// // 		assert.Equal(t, "ERR 2", res.Err[0].Error())
-// // 	}
-// // }
+	{
+		r := NewResult(nil)
+		r.SetValue(1)
+		res := c(r)
+		_ = res
+		assert.Len(t, res.Failure, 1)
+		assert.Equal(t, "RECOVERED", res.Failure[0].Error())
+	}
+}

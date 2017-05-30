@@ -6,55 +6,67 @@ import (
 )
 
 //-----------------------------------------------------------------------------
-
-// Domain messages/events/errors
-type Domain struct {
-	// Msg contains messages/events
-	Msg []error `json:"msg"`
-	Err []error `json:"err"`
-}
-
-//-----------------------------------------------------------------------------
 // Result
 
-// Result passes through the railway
+// Success .
+type Success struct {
+	Value    interface{} `json:"res"`
+	Messages []error     `json:"msg"`
+}
+
+// Result one single Result, passes through the railway
 type Result struct {
-	Res interface{} `json:"res"`
-	Domain
+	*Success `json:"res"`
+	Failure  []error `json:"err"`
 }
 
 // NewResult creates new Result
-func NewResult() *Result {
-	r := new(Result)
+func NewResult(value interface{}) *Result {
+	r := &Result{}
+	if value != nil {
+		r.Success = &Success{
+			Value: value,
+		}
+	}
 	return r
 }
 
-func (r *Result) mergePrev(prev *Result) *Result {
-	if prev == nil {
-		return r
+// GetValue .
+func (r *Result) GetValue() interface{} {
+	if r.Success == nil {
+		return nil
 	}
-	if len(prev.Msg) > 0 {
-		r.Msg = append(prev.Msg, r.Msg...)
+	return r.Success.Value
+}
+
+// SetValue .
+func (r *Result) SetValue(val interface{}) *Result {
+	if r.Success == nil {
+		r.Success = &Success{}
 	}
-	if len(prev.Err) > 0 {
-		r.Err = append(prev.Err, r.Err...)
-	}
+	r.Success.Value = val
 	return r
 }
 
 // AddErr adds an error
-func (r *Result) AddErr(err error) *Result {
-	if err != nil {
-		r.Err = append(r.Err, err)
+func (r *Result) AddErr(err ...error) *Result {
+	if err == nil {
+		return r
 	}
+	r.Success = nil
+	r.Failure = append(r.Failure, err...)
 	return r
 }
 
 // AddMsg adds a (domain) message/event
 func (r *Result) AddMsg(msg error) *Result {
-	if msg != nil {
-		r.Msg = append(r.Msg, msg)
+	if msg == nil {
+		return r
 	}
+	if r.Success == nil {
+		r.Success = &Success{}
+	}
+	r.Success.Messages = append(r.Success.Messages, msg)
 	return r
 }
 
@@ -63,37 +75,37 @@ func (r *Result) AddMsg(msg error) *Result {
 
 // ResultWriter for writing output Result
 type ResultWriter interface {
-	Write(Result)
-	Prev() Result
+	Write(*Result)
+	Last() *Result
 }
 
-type resWriter struct {
-	prev Result
+// DefaultResultWriter default implementation of ResultWriter
+type DefaultResultWriter struct {
+	last *Result
 }
 
-func newResWriter() *resWriter {
-	return &resWriter{}
+// NewDefaultResultWriter .
+func NewDefaultResultWriter() *DefaultResultWriter {
+	return &DefaultResultWriter{}
 }
 
-func (w *resWriter) Write(in Result) {
-	// current := &in
-	// current.mergePrev(&w.prev)
-	// w.prev = *current
-	w.prev = in
+func (w *DefaultResultWriter) Write(in *Result) {
+	w.last = in
 }
 
-func (w resWriter) Prev() Result { return w.prev }
+// Last give the previous Result
+func (w DefaultResultWriter) Last() *Result { return w.last }
 
 // Handler represents each step in the railway
 type Handler interface {
-	Handle(Result, ResultWriter)
+	Handle(*Result, ResultWriter)
 }
 
 // HandlerFunc for using a function as a Handler
-type HandlerFunc func(Result, ResultWriter)
+type HandlerFunc func(*Result, ResultWriter)
 
 // Handle implements Handler
-func (hf HandlerFunc) Handle(r Result, w ResultWriter) {
+func (hf HandlerFunc) Handle(r *Result, w ResultWriter) {
 	hf(r, w)
 }
 
@@ -102,7 +114,6 @@ func (hf HandlerFunc) Handle(r Result, w ResultWriter) {
 // Errors
 var (
 	ErrNoProcessor = errors.New(`ErrNoProcessor`)
-	ErrInvalidFunc = errors.New(`ErrInvalidFunc`)
 )
 
 func adapt(f interface{}) func(Handler) Handler {
@@ -112,144 +123,125 @@ func adapt(f interface{}) func(Handler) Handler {
 	var middleware func(Handler) Handler
 
 	switch current := f.(type) {
-	case func(Result, ResultWriter):
+	case func(*Result, ResultWriter):
 		middleware = func(next Handler) Handler {
-			return HandlerFunc(func(r Result, w ResultWriter) {
-				if len(w.Prev().Err) == 0 {
+			return HandlerFunc(func(r *Result, w ResultWriter) {
+				if w.Last() != nil && len(w.Last().Failure) == 0 {
 					current(r, w)
 				}
 				if next != nil {
-					next.Handle(w.Prev(), w)
+					next.Handle(w.Last(), w)
 				}
 			})
 		}
 	case func(Handler) Handler:
 		middleware = current
-	case func(Result) Result:
+	case func(*Result) *Result:
 		middleware = func(next Handler) Handler {
-			return HandlerFunc(func(r Result, w ResultWriter) {
+			return HandlerFunc(func(r *Result, w ResultWriter) {
 				// supervisory functions which will always get called
 				// if len(w.Prev().Err) == 0 { ...
 				res := current(r)
-				rbuff := w.Prev()
-				res.mergePrev(&rbuff)
 				w.Write(res)
-				// log.Printf("%+v", w.Prev())
 				if next != nil {
-					next.Handle(w.Prev(), w)
+					next.Handle(w.Last(), w)
 				}
 			})
 		}
 	case func() Handler:
 		middleware = func(next Handler) Handler {
-			return HandlerFunc(func(r Result, w ResultWriter) {
-				if len(w.Prev().Err) == 0 {
+			return HandlerFunc(func(r *Result, w ResultWriter) {
+				if w.Last() != nil && len(w.Last().Failure) == 0 {
 					current().Handle(r, w)
 				}
 				if next != nil {
-					next.Handle(w.Prev(), w)
+					next.Handle(w.Last(), w)
 				}
 			})
 		}
-	case func(Result, ResultWriter, Handler):
+	case func(*Result, ResultWriter, Handler):
 		middleware = func(next Handler) Handler {
-			return HandlerFunc(func(r Result, w ResultWriter) {
-				if len(w.Prev().Err) == 0 {
+			return HandlerFunc(func(r *Result, w ResultWriter) {
+				if w.Last() != nil && len(w.Last().Failure) == 0 {
 					current(r, w, next)
 				}
 			})
 		}
 	case Handler:
 		middleware = func(next Handler) Handler {
-			return HandlerFunc(func(r Result, w ResultWriter) {
-				if len(w.Prev().Err) == 0 {
+			return HandlerFunc(func(r *Result, w ResultWriter) {
+				if w.Last() != nil && len(w.Last().Failure) == 0 {
 					current.Handle(r, w)
 				}
 				if next != nil {
-					next.Handle(w.Prev(), w)
+					next.Handle(w.Last(), w)
 				}
 			})
 		}
 	case func(interface{}) (interface{}, error):
 		middleware = func(next Handler) Handler {
-			return HandlerFunc(func(r Result, w ResultWriter) {
-				if len(w.Prev().Err) == 0 {
-					res, err := current(r.Res)
-					rs := NewResult()
-					rs.Res = res
-					rs.AddErr(err)
-					rbuff := w.Prev()
-					rs.mergePrev(&rbuff)
-					w.Write(*rs)
-					// log.Printf("%+v", w.Prev())
+			return HandlerFunc(func(r *Result, w ResultWriter) {
+				if w.Last() != nil && len(w.Last().Failure) == 0 {
+					res, err := current(r.GetValue())
+					if err != nil {
+						r.AddErr(err)
+					} else {
+						r.SetValue(res)
+					}
+					w.Write(r)
 				}
 				if next != nil {
-					next.Handle(w.Prev(), w)
+					next.Handle(w.Last(), w)
 				}
 			})
 		}
 	case func(interface{}) error:
 		middleware = func(next Handler) Handler {
-			return HandlerFunc(func(r Result, w ResultWriter) {
-				if len(w.Prev().Err) == 0 {
-					err := current(r.Res)
-					rs := NewResult()
-					rs.Res = r.Res
-					rs.AddErr(err)
-					rbuff := w.Prev()
-					rs.mergePrev(&rbuff)
-					w.Write(*rs)
+			return HandlerFunc(func(r *Result, w ResultWriter) {
+				if w.Last() != nil && len(w.Last().Failure) == 0 {
+					err := current(r.GetValue())
+					if err != nil {
+						r.AddErr(err)
+					}
+					w.Write(r)
 				}
 				if next != nil {
-					next.Handle(w.Prev(), w)
+					next.Handle(w.Last(), w)
 				}
 			})
 		}
 	case func(interface{}) interface{}:
 		middleware = func(next Handler) Handler {
-			return HandlerFunc(func(r Result, w ResultWriter) {
-				if len(w.Prev().Err) == 0 {
-					res := current(r.Res)
-					rs := NewResult()
-					rs.Res = res
-					rbuff := w.Prev()
-					rs.mergePrev(&rbuff)
-					w.Write(*rs)
+			return HandlerFunc(func(r *Result, w ResultWriter) {
+				if w.Last() != nil && len(w.Last().Failure) == 0 {
+					res := current(r.GetValue())
+					r.SetValue(res)
+					w.Write(r)
 				}
 				if next != nil {
-					next.Handle(w.Prev(), w)
+					next.Handle(w.Last(), w)
 				}
 			})
 		}
 	case func(interface{}):
 		middleware = func(next Handler) Handler {
-			return HandlerFunc(func(r Result, w ResultWriter) {
-				if len(w.Prev().Err) == 0 {
-					current(r.Res)
-					rs := NewResult()
-					rs.Res = r.Res
-					rbuff := w.Prev()
-					rs.mergePrev(&rbuff)
-					w.Write(*rs)
+			return HandlerFunc(func(r *Result, w ResultWriter) {
+				if w.Last() != nil && len(w.Last().Failure) == 0 {
+					current(r.GetValue())
+					w.Write(r)
 				}
 				if next != nil {
-					next.Handle(w.Prev(), w)
+					next.Handle(w.Last(), w)
 				}
 			})
 		}
 	default:
 		middleware = func(next Handler) Handler {
-			return HandlerFunc(func(r Result, w ResultWriter) {
-				rs := NewResult()
-				rs.Res = r.Res
-				rs.AddMsg(fmt.Errorf("error: railway invalid func type %T", current))
-				rs.AddErr(ErrInvalidFunc)
-				rbuff := w.Prev()
-				rs.mergePrev(&rbuff)
-				rbuff = *rs
-				w.Write(*rs)
+			return HandlerFunc(func(r *Result, w ResultWriter) {
+				r.AddErr(fmt.Errorf("error: railway invalid func type %T", current))
+				w.Write(r)
 				if next != nil {
-					next.Handle(w.Prev(), w)
+					next.Handle(w.Last(), w)
 				}
 			})
 		}
@@ -260,25 +252,30 @@ func adapt(f interface{}) func(Handler) Handler {
 
 //-----------------------------------------------------------------------------
 
-func nop(r Result, w ResultWriter) { w.Write(r) }
+func nop(r *Result, w ResultWriter) { w.Write(r) }
 
 // Chain create a chain of processors - our railway segments. Valid signatures
 // are supervisory functions which will always get called:
-//	func(Result) Result
+//	func(*Result) *Result
+//	func(Handler) Handler
+// Second signature is a middleware with same assumed semantics as in Go's middleware pattern in web apps.
 // and non-supervisory functions which won't get called if there are any errors:
+//	func(*Result, ResultWriter)
+//	func() Handler
+//	func(*Result, ResultWriter, Handler)
+//	a Handler
 //	func(interface{}) (interface{}, error)
 //	func(interface{}) error
 //	func(interface{}) interface{}
 //	func(interface{})
-// otherwise an ErrInvalidFunc error would be added to errors passed in the
-// chain. Also the invalid type would be presented inside Msg list.
-func Chain(processors ...interface{}) func(Result) Result {
-	return func(input Result) Result {
+// otherwise an error would be added to errors passed in the
+// chain. Also the invalid type would be presented inside the error.
+func Chain(rw ResultWriter, processors ...interface{}) func(*Result) *Result {
+	return func(input *Result) *Result {
 		if len(processors) == 0 {
-			r := NewResult()
+			r := NewResult(nil)
 			r.AddErr(ErrNoProcessor)
-			r.mergePrev(&input)
-			return *r
+			return r
 		}
 
 		var adapted []func(Handler) Handler
@@ -306,23 +303,26 @@ func Chain(processors ...interface{}) func(Result) Result {
 			final = nop
 		}
 
-		w := newResWriter()
-		final.Handle(input, w)
-		return w.Prev()
+		if rw == nil {
+			rw = NewDefaultResultWriter()
+		}
+		rw.Write(input)
+		final.Handle(input, rw)
+		return rw.Last()
 	}
 }
 
-// // // PipeChain runs a chain concurrently & after the in channel gets closed
-// // // and depleted, it closes the out channel.
-// // func PipeChain(in <-chan Result, processors ...interface{}) <-chan Result {
-// // 	out := make(chan Result)
+// PipeChain runs a chain concurrently & after the in channel gets closed
+// and depleted, it closes the out channel.
+func PipeChain(rw ResultWriter, in <-chan *Result, processors ...interface{}) <-chan *Result {
+	out := make(chan *Result)
 
-// // 	p := Chain(processors...)
-// // 	go func() {
-// // 		defer close(out)
-// // 		for v := range in {
-// // 			out <- p(v)
-// // 		}
-// // 	}()
-// // 	return out
-// // }
+	p := Chain(rw, processors...)
+	go func() {
+		defer close(out)
+		for v := range in {
+			out <- p(v)
+		}
+	}()
+	return out
+}
