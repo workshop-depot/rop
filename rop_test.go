@@ -7,16 +7,51 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
 
-	"path/filepath"
-
 	"github.com/stretchr/testify/assert"
 )
 
-//-----------------------------------------------------------------------------
+func deleteSampleCSV() {
+	os.Remove(csvPath)
+}
+
+func createSampleCSV() {
+	csvPath = filepath.Join(os.TempDir(), fmt.Sprintf("TEST_%d.csv", time.Now().UnixNano()))
+	f, err := os.Create(csvPath)
+	if err != nil {
+		panic(err)
+	}
+	defer f.Close()
+
+	rndSrc := rand.NewSource(time.Now().UnixNano())
+	rnd := rand.New(rndSrc)
+	w := csv.NewWriter(f)
+	w.Comma = '|'
+	defer w.Flush()
+
+	for i := 0; i < 1000; i++ {
+		var sign float64 = -1
+		if rnd.Intn(10) >= 5 {
+			sign = 1
+		}
+		name := fmt.Sprintf("LOC_NAME_%v", rnd.Int63n(math.MaxInt64))
+		longitude := fmt.Sprintf("%.6f", rnd.Float64()*180*sign)
+		latitude := fmt.Sprintf("%.6f", rnd.Float64()*90*sign)
+		w.Write([]string{
+			name,
+			longitude,
+			latitude,
+		})
+	}
+}
+
+var (
+	csvPath string
+)
 
 func TestMain(m *testing.M) {
 	defer time.Sleep(time.Millisecond * 300)
@@ -24,6 +59,13 @@ func TestMain(m *testing.M) {
 	defer deleteSampleCSV()
 
 	m.Run()
+}
+
+func TestInterfaces(t *testing.T) {
+	var hf HandlerFunc
+	var _ Handler = hf
+	var w *resWriter
+	var _ ResultWriter = w
 }
 
 func TestSample01Simple(t *testing.T) {
@@ -34,8 +76,8 @@ func TestSample01Simple(t *testing.T) {
 	}
 	var step2 = func(input Result) Result {
 		if input.Res != `2nd` {
-			input.AddErr(errBoom)
-			return input
+			newRes := input.AddErr(errBoom)
+			return *newRes
 		}
 		return input
 	}
@@ -135,7 +177,6 @@ func TestSample02Handlers(t *testing.T) {
 		r := NewResult()
 		r.Res = `1`
 		res := c(*r)
-		assert.Contains(t, res.Err, ErrNotProcessed)
 		assert.Contains(t, res.Err, ErrNotInt)
 	}
 
@@ -169,44 +210,6 @@ var (
 )
 
 //-----------------------------------------------------------------------------
-
-func deleteSampleCSV() {
-	os.Remove(csvPath)
-}
-
-func createSampleCSV() {
-	csvPath = filepath.Join(os.TempDir(), fmt.Sprintf("TEST_%d.csv", time.Now().UnixNano()))
-	f, err := os.Create(csvPath)
-	if err != nil {
-		panic(err)
-	}
-	defer f.Close()
-
-	rndSrc := rand.NewSource(time.Now().UnixNano())
-	rnd := rand.New(rndSrc)
-	w := csv.NewWriter(f)
-	w.Comma = '|'
-	defer w.Flush()
-
-	for i := 0; i < 1000; i++ {
-		var sign float64 = -1
-		if rnd.Intn(10) >= 5 {
-			sign = 1
-		}
-		name := fmt.Sprintf("LOC_NAME_%v", rnd.Int63n(math.MaxInt64))
-		longitude := fmt.Sprintf("%.6f", rnd.Float64()*180*sign)
-		latitude := fmt.Sprintf("%.6f", rnd.Float64()*90*sign)
-		w.Write([]string{
-			name,
-			longitude,
-			latitude,
-		})
-	}
-}
-
-var (
-	csvPath string
-)
 
 func TestSample02GeoCSV(t *testing.T) {
 	f, err := os.Open(csvPath)
@@ -331,60 +334,60 @@ type location struct {
 
 //-----------------------------------------------------------------------------
 
-func TestSample02ConcurrentGeoCSV(t *testing.T) {
-	f, err := os.Open(csvPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
+// func TestSample02ConcurrentGeoCSV(t *testing.T) {
+// 	f, err := os.Open(csvPath)
+// 	if err != nil {
+// 		t.Fatal(err)
+// 	}
+// 	defer f.Close()
 
-	reader := csv.NewReader(f)
-	reader.Comma = '|'
+// 	reader := csv.NewReader(f)
+// 	reader.Comma = '|'
 
-	in := make(chan Result, 30)
+// 	in := make(chan Result, 30)
 
-	minDist := math.MaxFloat64
-	findMinDist := PipeChain(in, parse, (&toPair{}).Process, calcDist)
+// 	minDist := math.MaxFloat64
+// 	findMinDist := PipeChain(in, parse, (&toPair{}).Process, calcDist)
 
-	go func() {
-		defer close(in)
+// 	go func() {
+// 		defer close(in)
 
-		var record []string
-		var readErr error
-		for ; readErr == nil; record, readErr = reader.Read() {
-			r := NewResult()
-			r.Res = record
-			in <- *r
-		}
-	}()
+// 		var record []string
+// 		var readErr error
+// 		for ; readErr == nil; record, readErr = reader.Read() {
+// 			r := NewResult()
+// 			r.Res = record
+// 			in <- *r
+// 		}
+// 	}()
 
-	for res := range findMinDist {
-		if len(res.Err) > 0 {
-			// t.Log(`error:`, res.Err)
-			continue
-		}
-		d, ok := res.Res.(float64)
-		if !ok {
-			t.Fatal(`RESULT SHOULD BE A float64`)
-		}
-		if d < minDist {
-			minDist = d
-		}
-	}
+// 	for res := range findMinDist {
+// 		if len(res.Err) > 0 {
+// 			// t.Log(`error:`, res.Err)
+// 			continue
+// 		}
+// 		d, ok := res.Res.(float64)
+// 		if !ok {
+// 			t.Fatal(`RESULT SHOULD BE A float64`)
+// 		}
+// 		if d < minDist {
+// 			minDist = d
+// 		}
+// 	}
 
-	if minDist == math.MaxFloat64 {
-		t.Logf("%.6f", minDist)
-		t.Fail()
-	}
-}
+// 	if minDist == math.MaxFloat64 {
+// 		t.Logf("%.6f", minDist)
+// 		t.Fail()
+// 	}
+// }
 
 //-----------------------------------------------------------------------------
 
 func TestSupervisorySteps01(t *testing.T) {
 	steps := []interface{}{
 		func(in Result) Result {
-			in.AddMsg(errors.New("START"))
-			return in
+			nextResult := in.AddMsg(errors.New("START"))
+			return *nextResult
 		},
 		func(input interface{}) (interface{}, error) {
 			return "RES 1", nil
@@ -397,12 +400,12 @@ func TestSupervisorySteps01(t *testing.T) {
 			panic("must never get called")
 		},
 		func(in Result) Result {
-			in.AddMsg(errors.New("supervised"))
-			return in
+			nextResult := in.AddMsg(errors.New("supervised"))
+			return *nextResult
 		},
 		func(in Result) Result {
-			in.AddMsg(errors.New("END"))
-			return in
+			nextResult := in.AddMsg(errors.New("END"))
+			return *nextResult
 		},
 	}
 
@@ -421,3 +424,51 @@ func TestSupervisorySteps01(t *testing.T) {
 		assert.Equal(t, "ERR 2", res.Err[0].Error())
 	}
 }
+
+// // func TestSupervisorySteps02(t *testing.T) {
+// // 	steps := []interface{}{
+// // 		func(in Result) Result {
+// // 			defer func() {
+// // 				if e := recover(); e != nil {
+// // 					in.AddErr(fmt.Errorf("%v", e))
+// // 				}
+// // 			}()
+// // 			in.AddMsg(errors.New("START"))
+// // 			return in
+// // 		},
+// // 		func(input interface{}) (interface{}, error) {
+// // 			panic("PANICED")
+// // 			return "RES 1", nil
+// // 		},
+// // 		func(input interface{}) (interface{}, error) {
+// // 			assert.Equal(t, "RES 1", input)
+// // 			return nil, errors.New("ERR 2")
+// // 		},
+// // 		func(input interface{}) (interface{}, error) {
+// // 			panic("must never get called")
+// // 		},
+// // 		func(in Result) Result {
+// // 			in.AddMsg(errors.New("supervised"))
+// // 			return in
+// // 		},
+// // 		func(in Result) Result {
+// // 			in.AddMsg(errors.New("END"))
+// // 			return in
+// // 		},
+// // 	}
+
+// // 	c := Chain(steps...)
+
+// // 	{
+// // 		r := NewResult()
+// // 		r.Res = 1
+// // 		res := c(*r)
+// // 		assert.Nil(t, res.Res)
+// // 		assert.Len(t, res.Msg, 3)
+// // 		assert.Equal(t, "START", res.Msg[0].Error())
+// // 		assert.Equal(t, "supervised", res.Msg[1].Error())
+// // 		assert.Equal(t, "END", res.Msg[2].Error())
+// // 		assert.Len(t, res.Err, 1)
+// // 		assert.Equal(t, "ERR 2", res.Err[0].Error())
+// // 	}
+// // }
