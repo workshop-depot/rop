@@ -256,8 +256,8 @@ func nop(r *Result, w ResultWriter) { w.Write(r) }
 
 // Chain create a chain of processors - our railway segments. Valid signatures
 // are supervisory functions which will always get called:
-//	func(*Result) *Result
-//	func(Handler) Handler
+//	func(*Result) *Result // if there are no panics
+//	func(Handler) Handler // always
 // Second signature is a middleware with same assumed semantics as in Go's middleware pattern in web apps.
 // and non-supervisory functions which won't get called if there are any errors:
 //	func(*Result, ResultWriter)

@@ -3,7 +3,19 @@
 
 For reading more about Railway Oriented Programming, look  [here](http://fsharpforfunandprofit.com/rop/).
 
-It's easy to construct reusable chains, with stateless functions and even (to some extent) graphs of functionalities.
+It's easy to construct reusable chains, with stateless functions and even (to some extent) graphs of functionalities. 
+
+It's nontheorical essence is:
+
+```
+                ________    ________    ________
+happy path  --->|      |--->|      |--->|      |---> result
+                | func |    | func |    | func |
+failure     --->|      |--->|      |--->|      |---> error
+                --------    --------    --------
+```
+
+As you see it looks like the idiomatic Go pattern of writing functions as `func(TIn) (TOut, error)`, except for the input error from previous step.
 
 A sequential chain of functions can be made like:
 

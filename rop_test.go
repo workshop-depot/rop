@@ -403,7 +403,13 @@ func TestSupervisorySteps01(t *testing.T) {
 			panic("must never get called")
 		},
 		func(in *Result) *Result {
-			return in.AddMsg(errors.New("supervised"))
+			var res = NewResult(nil)
+			*res = *in
+			if len(res.Failure) > 0 {
+				res.AddMsg(res.Failure[0])
+				res.Failure = nil
+			}
+			return res.AddMsg(errors.New("supervised"))
 		},
 		func(in *Result) *Result {
 			return in.AddMsg(errors.New("END"))
@@ -416,14 +422,12 @@ func TestSupervisorySteps01(t *testing.T) {
 		r := NewResult(nil)
 		r.SetValue(1)
 		res := c(r)
-		_ = res
-		// assert.Nil(t, res.Res)
-		// assert.Len(t, res.Success.Messages, 3)
-		// assert.Equal(t, "START", res.Msg[0].Error())
-		// assert.Equal(t, "supervised", res.Msg[1].Error())
-		// assert.Equal(t, "END", res.Msg[2].Error())
-		assert.Len(t, res.Failure, 1)
-		assert.Equal(t, "ERR 2", res.Failure[0].Error())
+		assert.Nil(t, res.Value)
+		assert.Len(t, res.Messages, 3)
+		assert.Equal(t, "ERR 2", res.Messages[0].Error())
+		assert.Equal(t, "supervised", res.Messages[1].Error())
+		assert.Equal(t, "END", res.Messages[2].Error())
+		assert.Len(t, res.Failure, 0)
 	}
 }
 
